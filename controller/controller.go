@@ -20,7 +20,9 @@ type Controller interface {
 }
 
 func NewController(dao dao.ReservationDao) *controller {
-	return &controller{}
+	return &controller{
+		reservationDao: dao,
+	}
 }
 
 type controller struct {

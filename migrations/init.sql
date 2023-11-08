@@ -3,10 +3,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE users (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-  updated_at TIMESTAMP WITHOUT TIME ZONE,
-  deleted_at TIMESTAMP WITHOUT TIME ZONE
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4()
 );
 
 CREATE TABLE availabilities (

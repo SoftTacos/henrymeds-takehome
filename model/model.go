@@ -3,19 +3,22 @@ package model
 import "time"
 
 type User struct {
-	ID string
+	ID       string
+	Username string
 }
 
 type TimeRange struct {
-	Start time.Time
-	End   time.Time
+	Start time.Time `json:"start" pg:"start_time"`
+	End   time.Time `json:"end" pg:"end_time"`
 }
 
 type Reservation struct {
-	ID         string
-	ClientID   string
-	ProviderID string
-	Confirmed  bool
+	ID             string
+	ClientID       string
+	ProviderID     string
+	Confirmed      bool
+	ConfirmationID string
+	ExpiresAt      time.Time
 	TimeRange
 }
 
@@ -30,26 +33,21 @@ type GetAvailabilities struct {
 }
 
 type CreateReservation struct {
-	ReservationID string
-	ClientID      string
-	ProviderID    string
+	ClientID   string `json:"clientId"`
+	ProviderID string `json:"providerId"`
 	TimeRange
 }
 
 type GetReservations struct {
-	ID         string
-	ProviderID string
-	ClientID   string
-	TimeRange
+	ID             string
+	ProviderID     string
+	ClientID       string
+	ConfirmationID string
+	*TimeRange
 }
 
 type Availability struct {
-	ID string
+	ID         string
+	ProviderID string
 	TimeRange
-}
-
-type ReservationConfirmation struct {
-	ID            string
-	ReservationID string
-	ExpiresAt     time.Time
 }

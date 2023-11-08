@@ -3,10 +3,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"henrymeds-takehome/dao"
 	"henrymeds-takehome/model"
 	"log"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -15,8 +18,10 @@ const (
 )
 
 type Controller interface {
-	CreateAvailabilities(ctx context.Context, request model.CreateAvailabilities) error
+	CreateAvailability(ctx context.Context, request model.CreateAvailabilities) error
 	GetAvailabilities(ctx context.Context, request model.GetAvailabilities) (availabilities []model.TimeRange, err error)
+	CreateReservation(ctx context.Context, request model.CreateReservation) (confirmationID string, err error)
+	ConfirmReservation(ctx context.Context, confirmationId string) (err error)
 }
 
 func NewController(dao dao.ReservationDao) *controller {
@@ -29,13 +34,13 @@ type controller struct {
 	reservationDao dao.ReservationDao
 }
 
-func (c *controller) CreateAvailabilities(ctx context.Context, request model.CreateAvailabilities) (err error) {
+func (c *controller) CreateAvailability(ctx context.Context, request model.CreateAvailabilities) (err error) {
 	var (
-		existingAvailabilities []model.TimeRange
+		existingAvailabilities []model.Availability
 		overlaps               []model.TimeRange
 	)
 
-	err = validateCreateAvailabilities(request)
+	err = validateCreateAvailability(request)
 	if err != nil {
 		log.Println(err)
 		return
@@ -47,11 +52,10 @@ func (c *controller) CreateAvailabilities(ctx context.Context, request model.Cre
 		TimeRange:  request.TimeRange,
 	})
 	if err != nil {
-		log.Println("failed to check for existing availabilities: ", err)
 		return
 	}
 
-	overlaps = detectOverlap(append(existingAvailabilities, request.TimeRange))
+	overlaps = detectOverlap(append(extractTimeranges(existingAvailabilities), request.TimeRange))
 	if len(overlaps) > 0 {
 		// Ideally we don't throw an error here, we just extend the existing availability timerange to end when the submitted timerange ends
 		// however, I only have 2h, so this corner is getting cut
@@ -62,13 +66,18 @@ func (c *controller) CreateAvailabilities(ctx context.Context, request model.Cre
 	}
 
 	// insert
-	err = c.reservationDao.InsertAvailabilities(ctx, request)
+	err = c.reservationDao.InsertAvailabilities(ctx, []model.Availability{
+		{
+			TimeRange:  request.TimeRange,
+			ProviderID: request.ProviderID,
+		},
+	})
 	// I prefer not to print every log on every layer unless it provides useful tracing context, this avoids log spam
 	// the error will get logged on the handler layer
 	return
 }
 
-func validateCreateAvailabilities(request model.CreateAvailabilities) (err error) {
+func validateCreateAvailability(request model.CreateAvailabilities) (err error) {
 	if !request.Start.Before(request.End) {
 		err = errors.New("start time must be before end time")
 	} else if request.Start.Minute()%15 != 0 {
@@ -82,8 +91,10 @@ func validateCreateAvailabilities(request model.CreateAvailabilities) (err error
 	return
 }
 
-func (c *controller) GetAvailabilities(ctx context.Context, request model.GetAvailabilities) (availabilities []model.TimeRange, err error) {
-
+func (c *controller) GetAvailabilities(ctx context.Context, request model.GetAvailabilities) (availableTimeranges []model.TimeRange, err error) {
+	var (
+		existingAvailabilities []model.Availability
+	)
 	err = validateGetAvailabilities(request)
 	if err != nil {
 		log.Println(err)
@@ -91,12 +102,12 @@ func (c *controller) GetAvailabilities(ctx context.Context, request model.GetAva
 	}
 
 	// retrieve availabilities that overlap with request start-end
-	availabilities, err = c.reservationDao.GetAvailabilities(ctx, request)
+	existingAvailabilities, err = c.reservationDao.GetAvailabilities(ctx, request)
 	if err != nil {
 		log.Println("failed to retrieve availabilities: ", err)
 		return
 	}
-
+	availableTimeranges = extractTimeranges(existingAvailabilities)
 	// retrieve reservations that overlap with request start-end
 
 	// subtract reservations from retrieved availabilities
@@ -118,11 +129,10 @@ func validateGetAvailabilities(request model.GetAvailabilities) (err error) {
 
 func (c *controller) CreateReservation(ctx context.Context, request model.CreateReservation) (confirmationID string, err error) {
 	var (
-		availabilities []model.TimeRange
+		availabilities []model.Availability
 		overlaps       []model.TimeRange
 		// reservations   []model.Reservation
 		newReservation model.Reservation
-		confirmation   model.ReservationConfirmation
 	)
 
 	err = validateCreateReservation(request)
@@ -143,10 +153,11 @@ func (c *controller) CreateReservation(ctx context.Context, request model.Create
 		return
 	}
 
-	overlaps = detectOverlap(append(availabilities, request.TimeRange))
+	// detect overlaps and verify that the reservation is completely contained within availabilities
+	overlaps = detectOverlap(append(extractTimeranges(availabilities), request.TimeRange))
 	// if there is absolutely no overlap, that means there are no availabilities
 	if len(overlaps) == 0 {
-		err = errors.New("no availability during the requested time")
+		err = fmt.Errorf("no availability during the requested times: %v - %v", request.Start, request.End)
 		log.Println(err)
 		return
 	} else {
@@ -163,8 +174,6 @@ func (c *controller) CreateReservation(ctx context.Context, request model.Create
 		}
 	}
 
-	// TODO: clean up the repeated calls
-
 	err = c.checkReservationAvailability(ctx, request.ClientID, request.ProviderID, request.TimeRange)
 	if err != nil {
 		return
@@ -172,6 +181,7 @@ func (c *controller) CreateReservation(ctx context.Context, request model.Create
 	newReservation, err = c.reservationDao.InsertReservation(ctx, model.Reservation{
 		ClientID:   request.ClientID,
 		ProviderID: request.ProviderID,
+		ExpiresAt:  time.Now().Add(reservationExpirationTime),
 		Confirmed:  false,
 		TimeRange:  request.TimeRange,
 	})
@@ -180,15 +190,7 @@ func (c *controller) CreateReservation(ctx context.Context, request model.Create
 		return // TODO:error handling
 	}
 
-	confirmation, err = c.reservationDao.InsertReservationConfirmation(ctx, model.ReservationConfirmation{
-		ReservationID: newReservation.ID,
-		ExpiresAt:     time.Now().Add(reservationExpirationTime),
-	})
-	if err != nil {
-		log.Println("failed to insert reservation confirmation")
-		return // TODO:error handling
-	}
-	confirmationID = confirmation.ID
+	confirmationID = newReservation.ConfirmationID
 
 	return
 }
@@ -199,30 +201,36 @@ func (c *controller) checkReservationAvailability(ctx context.Context, clientId 
 	var reservations []model.Reservation
 	reservations, err = c.reservationDao.GetReservations(ctx, model.GetReservations{
 		ProviderID: providerId,
-		TimeRange:  timerange,
+		TimeRange:  &timerange,
 	})
 	if err != nil {
 		log.Println("failed to retrieve reservations")
 		return // TODO:error handling
 	}
-	// error if any are found
+	// if there are any reservations that have been confirmed or haven't expired
+	// personally I would prefer to put this in the query, but that complicates the function
+	// significantly and adds significant devtime for this exercise
 	if len(reservations) > 0 {
-		err = errors.New("the provider has conflicting reservations during that time")
-		log.Println(err)
-		return
+		for _, res := range reservations {
+			if res.Confirmed || time.Now().After(res.ExpiresAt) {
+				err = errors.New("the provider has conflicting reservations during that time")
+				log.Println(err)
+				return
+			}
+		}
 	}
 
 	// retrieve reservations that overlap with request timerange
 	reservations, err = c.reservationDao.GetReservations(ctx, model.GetReservations{
 		ClientID:  clientId,
-		TimeRange: timerange,
+		TimeRange: &timerange,
 	})
 	if err != nil {
 		log.Println("failed to retrieve reservations")
 		return // TODO:error handling
 	}
-	// error if any are found
-	if len(reservations) > 0 {
+	// error if more than 1 are found, don't allow a client to double book even unconfirmed reservations.
+	if len(reservations) > 1 {
 		err = errors.New("the client has conflicting reservations during that time")
 		log.Println(err)
 	}
@@ -261,26 +269,35 @@ func detectOverlap(timeRanges []model.TimeRange) (overlappingRanges []model.Time
 	return
 }
 
+// I separated confirmations out into ReservationConfirmation to demonstrate some level of security competency
+// I realize I use UUIDs everywhere else, however generally you want to try to hide as many ID/UUIDs as possible from the
+// outside world. There wasn't time to do that however, and the user only uses their own UUID and their provider's UUID.
 func (c *controller) ConfirmReservation(ctx context.Context, confirmationId string) (err error) {
 	var (
-		confirmation model.ReservationConfirmation
 		reservations []model.Reservation
 		reservation  model.Reservation
 	)
 
-	confirmation, err = c.reservationDao.GetReservationConfirmation(ctx, confirmationId)
+	// validate the UUID, don't want strings going directly to the DB
+	_, err = uuid.Parse(confirmationId)
 	if err != nil {
-		log.Println("failed to retrieve reservation confirmation")
-		return // TODO:error handling
+		log.Println("invalid UUID provided")
+		err = errors.New("invalid UUID provided")
+		return
 	}
 
 	// get reservation
 	reservations, err = c.reservationDao.GetReservations(ctx, model.GetReservations{
-		ID: confirmation.ReservationID,
+		ConfirmationID: confirmationId,
 	})
 	if err != nil {
 		log.Println("failed to retrieve reservations")
 		return // TODO:error handling
+	}
+	if len(reservations) == 0 {
+		err = errors.New("no reservation found for that confirmation Id")
+		log.Println(err.Error(), confirmationId)
+		return
 	}
 	reservation = reservations[0]
 
@@ -291,7 +308,7 @@ func (c *controller) ConfirmReservation(ctx context.Context, confirmationId stri
 	}
 
 	// if it has NOT expired, confirm it and return
-	if confirmation.ExpiresAt.Before(time.Now()) {
+	if reservation.ExpiresAt.Before(time.Now()) {
 		err = c.reservationDao.ConfirmReservation(ctx, reservation.ID)
 		if err != nil {
 			log.Println("failed to confirm reservation: ", err)
@@ -310,5 +327,12 @@ func (c *controller) ConfirmReservation(ctx context.Context, confirmationId stri
 		log.Println("failed to confirm reservation: ", err)
 	}
 
+	return
+}
+
+func extractTimeranges(availabilities []model.Availability) (timeranges []model.TimeRange) {
+	for _, avail := range availabilities {
+		timeranges = append(timeranges, avail.TimeRange)
+	}
 	return
 }

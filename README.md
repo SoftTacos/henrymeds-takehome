@@ -6,6 +6,7 @@
 - The general standard for configuration variables is to set them in environment variables. I decided to just pass them in as flags for clarity and ease of use. I don't want you to have to configure your environment just to run this once.
 - In a real-world setting, I would have changed "Availability" to "Opening" or something shorter. I decided to keep it for this exercise for continuity.
 - I defintely went over on dev-time, I took appx 2h 40min on the code. I felt that compromising on dev time was an acceptable requirements tradeoff vs no catching edge cases.
+- Upon writing this README, I realized I misinterpreted one of the requirements in my haste. Instead of all reservations being 15min long, I enforced that all reservations and availiabilities to start and end on 15min intervals. This would be a pretty simple fix, but I want to stick to my 2:40 time estimate.
 
 ## Setup Notes
 I set this whole thing up on Linux, if you are on windows you might have to adapt some of these setup steps.
@@ -28,6 +29,73 @@ Connection string format: postgresql://[user[:password]@][netloc][:port][/dbname
 
 Example db_url: postgres://postgres:postgres_password@localhost/henrymed?sslmode=disable
 
-## Endpoints:
-- TODO
+# Endpoints:
+- variables are highlighted or surrounded by backticks, depending on if you're using a .md viewer
+- all times are in RFC3339 format. Ex: `2023-11-11T15:15:00Z`
 
+## Get availabilities
+Format: GET /users/`providerId`/availabilities?start=`start_time`&end=`end_time`
+
+Example URL: http://localhost:9001/users/e1ceaf4f-b5a5-4848-a71b-82b2ef02dd5e/availabilities?start=2023-11-10T15:15:00Z&end=2023-11-11T15:15:00Z
+
+Example Response Body:
+```
+[
+    {
+        "start": "2023-11-11T15:15:00Z",
+        "end": "2023-11-12T15:15:00Z"
+    },
+    {
+        "start": "2023-11-10T15:15:00Z",
+        "end": "2023-11-11T15:15:00Z"
+    }
+]
+```
+
+
+## Create availabilities
+Format: POST /users/`providerId`/availabilities
+Body: 
+```
+{
+    "start":"2023-11-11T15:15:00Z",
+    "end":"2023-11-12T15:15:00Z"
+}
+```
+
+Response body is empty
+
+Example URL: http://localhost:9001/users/e1ceaf4f-b5a5-4848-a71b-82b2ef02dd5e/availabilities
+
+## Create reservation
+Format: POST /reservations
+Body: 
+```
+{
+    "clientId":"aa5ad430-a5f5-4a80-ad84-f22bc2852966",
+    "providerId":"e1ceaf4f-b5a5-4848-a71b-82b2ef02dd5e",
+    "start":"2023-11-11T15:15:00Z",
+    "end":"2023-11-12T15:15:00Z"
+}
+```
+
+Returns the confirmationId in the response body as a string
+
+Example Response Body:
+```
+66fb346e-fb17-41b6-8cff-fe9d3ae104f4
+```
+
+## Create availabilities
+Format: POST /reservations/confirm/`confirmationId`
+Body: 
+```
+{
+    "start":"2023-11-11T15:15:00Z",
+    "end":"2023-11-12T15:15:00Z"
+}
+```
+
+Response body is empty
+
+Example URL: http://localhost:9001/reservations/confirm/66fb346e-fb17-41b6-8cff-fe9d3ae104f4

@@ -7,6 +7,7 @@
 - In a real-world setting, I would have changed "Availability" to "Opening" or something shorter. I decided to keep it for this exercise for continuity.
 - I defintely went over on dev-time, I took appx 2h 40min on the code. I felt that compromising on dev time was an acceptable requirements tradeoff vs no catching edge cases.
 - Upon writing this README, I realized I misinterpreted one of the requirements in my haste. Instead of all reservations being 15min long, I enforced that all reservations and availiabilities to start and end on 15min intervals. This would be a pretty simple fix, but I want to stick to my 2:40 time estimate.
+- Retrieval of availabilities does not subtract the reservations from available times. I intended to circle back and implement that, however I did not notice that until now.
 
 ## Setup Notes
 I set this whole thing up on Linux, if you are on windows you might have to adapt some of these setup steps.
